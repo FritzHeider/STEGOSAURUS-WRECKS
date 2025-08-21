@@ -3,6 +3,7 @@ import base64
 import zlib
 import streamlit as st
 from PIL import Image
+from share_utils import create_share
 
 def convert_to_png(image_path):
     """
@@ -96,6 +97,56 @@ def encode_zlib_into_image(image, file_data, output_path, plane="RGB"):
 
     img.save(output_path, format="PNG")
 
+
+def decode_text_from_plane(image, plane="RGB"):
+    """Extract text embedded in a given color plane."""
+    img = image.convert("RGBA")
+    width, height = img.size
+    binary = ""
+    for y in range(height):
+        for x in range(width):
+            r, g, b, a = img.getpixel((x, y))
+            if 'R' in plane:
+                binary += str(r & 1)
+            if 'G' in plane:
+                binary += str(g & 1)
+            if 'B' in plane:
+                binary += str(b & 1)
+            if 'A' in plane:
+                binary += str(a & 1)
+    chars = [binary[i:i + 8] for i in range(0, len(binary), 8)]
+    text = ""
+    for ch in chars:
+        if ch == "00000000":
+            break
+        text += chr(int(ch, 2))
+    return text
+
+
+def decode_zlib_from_image(image, plane="RGB"):
+    """Extract zlib-compressed data from a given color plane."""
+    img = image.convert("RGBA")
+    width, height = img.size
+    binary = ""
+    for y in range(height):
+        for x in range(width):
+            r, g, b, a = img.getpixel((x, y))
+            if 'R' in plane:
+                binary += str(r & 1)
+            if 'G' in plane:
+                binary += str(g & 1)
+            if 'B' in plane:
+                binary += str(b & 1)
+            if 'A' in plane:
+                binary += str(a & 1)
+    data_bytes = bytearray()
+    for i in range(0, len(binary), 8):
+        byte = binary[i:i + 8]
+        if byte == "00000000":
+            break
+        data_bytes.append(int(byte, 2))
+    return zlib.decompress(bytes(data_bytes))
+
 def get_image_download_link(img_path):
     """
     Generates a download link for the encoded image.
@@ -108,6 +159,9 @@ def get_image_download_link(img_path):
 
 def main():
     st.title("STEGOSAURUS WRECKS")
+
+    if 'last_output' not in st.session_state:
+        st.session_state['last_output'] = None
 
     st.info("🦕S̷̛̤̼̥̹͚͈̓̽̂E̴̳̘͕͍̯̮͖̖͚͋̋͠Ȩ̶͕̪͈̋ͅḎ̴̮͙̯̅̿̈́͐̏ ̷̳̗̟͕͐͂͒̉̑̕T̶̡͖͕̬̺̪̼̂̋̎̾̓͠ͅḪ̷̼͈̝̯̉͆̓̔̒̿̀̈́E̷̝̰͔̺͛̋͌̂̚ ̴̡̡̳̭̹͐̉̈̑F̵̫̜͆́̄͆͑̍́͆͠U̶̪̖̖̻̫͙̓̆̓͜T̵̛͔̭͈̙̙̠̜̤̠̓́́̈̕̕Ȕ̵̜͎̘̞̯͍̦̫͖̆Ŗ̶͍͓̤̪͍̦͔͙̿Ȩ̵͈̹̬͓̝̮̟̎̓͒̀̈́🔮")
     uploaded_file = st.file_uploader("Choose an image...", type=["png", "jpg", "jpeg"])
@@ -177,8 +231,19 @@ def main():
         st.image(output_image_path, caption="Click the link below to download the encoded image.", use_column_width=True)
         st.markdown(get_image_download_link(output_image_path), unsafe_allow_html=True)
 
+        st.session_state['last_output'] = output_image_path
+
         # Add balloons
         st.balloons()
+
+    if st.session_state.get('last_output'):
+        if st.button("Share"):
+            share_id = create_share(st.session_state['last_output'])
+            share_url = f"http://localhost:8000/share/{share_id}"
+            twitter_url = f"https://twitter.com/intent/tweet?url={share_url}"
+            st.success(f"Share link: {share_url}")
+            st.markdown(f"[Tweet this]({twitter_url})")
+
 
 if __name__ == "__main__":
     main()
