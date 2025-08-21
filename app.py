@@ -107,9 +107,34 @@ def get_image_download_link(img_path):
     return href
 
 def main():
-    st.title("STEGOSAURUS WRECKS")
+    st.markdown(
+        """
+        <style>
+            .stApp {
+                background-color: #fefae0;
+                color: #283618;
+            }
+            .stButton>button {
+                background-color: #606c38;
+                color: #fefae0;
+            }
+            .stTextInput>div>div>input {
+                background-color: #fff;
+                color: #283618;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    st.info("🦕S̷̛̤̼̥̹͚͈̓̽̂E̴̳̘͕͍̯̮͖̖͚͋̋͠Ȩ̶͕̪͈̋ͅḎ̴̮͙̯̅̿̈́͐̏ ̷̳̗̟͕͐͂͒̉̑̕T̶̡͖͕̬̺̪̼̂̋̎̾̓͠ͅḪ̷̼͈̝̯̉͆̓̔̒̿̀̈́E̷̝̰͔̺͛̋͌̂̚ ̴̡̡̳̭̹͐̉̈̑F̵̫̜͆́̄͆͑̍́͆͠U̶̪̖̖̻̫͙̓̆̓͜T̵̛͔̭͈̙̙̠̜̤̠̓́́̈̕̕Ȕ̵̜͎̘̞̯͍̦̫͖̆Ŗ̶͍͓̤̪͍̦͔͙̿Ȩ̵͈̹̬͓̝̮̟̎̓͒̀̈́🔮")
+    st.title("STEGOSAURUS WRECKS")
+    st.markdown(
+        "*In the Jurassic jungles of data, Stegosaurus Wrecks guards your secrets with plates of code.*"
+    )
+
+    st.info(
+        "🦕S̷̛̤̼̥̹͚͈̓̽̂E̴̳̘͕͍̯̮͖̖͚͋̋͠Ȩ̶͕̪͈̋ͅḎ̴̮͙̯̅̿̈́͐̏ ̷̳̗̟͕͐͂͒̉̑̕T̶̡͖͕̬̺̪̼̂̋̎̾̓͠ͅḪ̷̼͈̝̯̉͆̓̔̒̿̀̈́E̷̝̰͔̺͛̋͌̂̚ ̴̡̡̳̭̹͐̉̈̑F̵̫̜͆́̄͆͑̍́͆͠U̶̪̖̖̻̫͙̓̆̓͜T̵̛͔̭͈̙̙̠̜̤̠̓́́̈̕̕Ȕ̵̜͎̘̞̯͍̦̫͖̆Ŗ̶͍͓̤̪͍̦͔͙̿Ȩ̵͈̹̬͓̝̮̟̎̓͒̀̈́🔮"
+    )
     uploaded_file = st.file_uploader("Choose an image...", type=["png", "jpg", "jpeg"])
     
     if uploaded_file is not None:
@@ -158,27 +183,40 @@ def main():
     if st.button("Encode"):
         st.info("Processing...")
 
-        # Compress the image before encoding to ensure it's under 900 KB
-        compress_image_before_encoding(image_path, output_image_path)
+        try:
+            # Compress the image before encoding to ensure it's under 900 KB
+            compress_image_before_encoding(image_path, output_image_path)
 
-        # If embedding text
-        if option == "Text" and master_plan:
-            image = Image.open(output_image_path)
-            encode_text_into_plane(image, master_plan, output_image_path, encoding_plane)
-            st.success(f"Text successfully encoded into the {encoding_plane} plane.")
-        
-        # If embedding zlib file
-        elif option == "Zlib Compressed File" and uploaded_file_zlib:
-            file_data = uploaded_file_zlib.read()
-            image = Image.open(output_image_path)
-            encode_zlib_into_image(image, file_data, output_image_path, encoding_plane)
-            st.success(f"Zlib compressed file successfully encoded into the {encoding_plane} plane.")
-        
-        st.image(output_image_path, caption="Click the link below to download the encoded image.", use_column_width=True)
-        st.markdown(get_image_download_link(output_image_path), unsafe_allow_html=True)
+            # If embedding text
+            if option == "Text" and master_plan:
+                image = Image.open(output_image_path)
+                encode_text_into_plane(image, master_plan, output_image_path, encoding_plane)
+                st.success(f"🦖 Text successfully encoded into the {encoding_plane} plane.")
+                st.image("stegg.png", width=100)
 
-        # Add balloons
-        st.balloons()
+            # If embedding zlib file
+            elif option == "Zlib Compressed File" and uploaded_file_zlib:
+                file_data = uploaded_file_zlib.read()
+                image = Image.open(output_image_path)
+                encode_zlib_into_image(image, file_data, output_image_path, encoding_plane)
+                st.success(f"🦖 Zlib compressed file successfully encoded into the {encoding_plane} plane.")
+                st.image("stegg.png", width=100)
+            else:
+                raise ValueError("No data provided for encoding.")
+
+            st.image(
+                output_image_path,
+                caption="Click the link below to download the encoded image.",
+                use_column_width=True,
+            )
+            st.markdown(get_image_download_link(output_image_path), unsafe_allow_html=True)
+
+            # Add balloons
+            st.balloons()
+        except Exception as e:
+            st.error(f"🦕 Encoding failed: {e}")
+            st.image("stegg(1).png", width=100)
+            st.snow()
 
 if __name__ == "__main__":
     main()
