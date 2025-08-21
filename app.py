@@ -6,7 +6,10 @@ import zlib
 import hashlib
 from typing import Iterable, List, Tuple
 
-import streamlit as st
+try:
+    import streamlit as st
+except Exception:  # pragma: no cover - UI not needed during tests
+    st = None  # type: ignore
 from PIL import Image
 
 # --- Optional share integration (gated) ---------------------------------------
@@ -128,46 +131,49 @@ def _bits_to_bytes(bits: str) -> bytes:
 
 def _embed_bits(img: Image.Image, bits: str, plane: str) -> Image.Image:
     """
-    Embed the provided bitstring across the selected channels, sequentially.
+    Embed the provided bitstring across the selected channels sequentially,
+    exhausting one channel's capacity before moving to the next.
     """
     img = img.convert("RGBA")
     width, height = img.size
     channels = _channels_for_plane(plane)
     capacity = width * height * len(channels)
     if len(bits) > capacity:
-        raise ValueError(f"Payload too large for image/channel capacity ({len(bits)} bits > {capacity} bits).")
+        raise ValueError(
+            f"Payload too large for image/channel capacity ({len(bits)} bits > {capacity} bits)."
+        )
 
     idx = 0
-    for y in range(height):
-        for x in range(width):
-            r, g, b, a = img.getpixel((x, y))
-            vals = [r, g, b, a]
-            for ch in channels:
+    pixels = img.load()
+    for ch in channels:
+        for y in range(height):
+            for x in range(width):
                 if idx >= len(bits):
-                    img.putpixel((x, y), tuple(vals))
                     return img
+                r, g, b, a = pixels[x, y]
+                vals = [r, g, b, a]
                 vals[ch] = (vals[ch] & 0xFE) | int(bits[idx])
+                pixels[x, y] = tuple(vals)
                 idx += 1
-            img.putpixel((x, y), tuple(vals))
     return img  # exact fit
 
 
 def _extract_bits(img: Image.Image, plane: str, bits_needed: int | None = None) -> str:
     """
     Extract bits in the same channel order used by _embed_bits.
-    If bits_needed is provided, stop when that many bits have been collected.
-    Otherwise, read the full capacity (callers can post-process).
+    If bits_needed is provided, stop when that many bits have been
+    collected. Otherwise, read the full capacity (callers can
+    post-process).
     """
     img = img.convert("RGBA")
     width, height = img.size
     channels = _channels_for_plane(plane)
     bits: List[str] = []
-    for y in range(height):
-        for x in range(width):
-            r, g, b, a = img.getpixel((x, y))
-            vals = [r, g, b, a]
-            for ch in channels:
-                bits.append(str(vals[ch] & 1))
+    pixels = img.load()
+    for ch in channels:
+        for y in range(height):
+            for x in range(width):
+                bits.append(str(pixels[x, y][ch] & 1))
                 if bits_needed is not None and len(bits) >= bits_needed:
                     return "".join(bits)
     return "".join(bits)
@@ -221,7 +227,7 @@ def encode_text_into_plane(image: Image.Image, text: str, output_path: str, plan
         to_store = text.encode("utf-8")
 
     framed_bits = _frame_with_length(to_store)
-    out_img = _embed_bits(image.convert("RGBA"), framed_bits, plane)
+    out_img = _embed_bits(image, framed_bits, plane)
     out_img.save(output_path, format="PNG")
 
 
@@ -232,7 +238,7 @@ def encode_zlib_into_image(image: Image.Image, file_data: bytes, output_path: st
     compressed = zlib.compress(file_data)
     payload = encrypt_data(compressed, password) if password else compressed
     framed_bits = _frame_with_length(payload)
-    out_img = _embed_bits(image.convert("RGBA"), framed_bits, plane)
+    out_img = _embed_bits(image, framed_bits, plane)
     out_img.save(output_path, format="PNG")
 
 
@@ -243,7 +249,7 @@ def decode_text_from_plane(image: Image.Image, plane: str = "RGB", password: str
     wrapped, encrypted token and will decrypt it.
     """
     # Read all available capacity bits
-    bits = _extract_bits(image, plane, bits_needed=None)
+    bits = _extract_bits(image, plane)
     raw = _deframe_with_length_or_terminator(bits)
 
     if password:
@@ -264,7 +270,7 @@ def decode_zlib_from_image(image: Image.Image, plane: str = "RGB", password: str
     """
     Extract binary from the selected plane, optional decrypt, then zlib decompress.
     """
-    bits = _extract_bits(image, plane, bits_needed=None)
+    bits = _extract_bits(image, plane)
     payload = _deframe_with_length_or_terminator(bits)
 
     if password:
