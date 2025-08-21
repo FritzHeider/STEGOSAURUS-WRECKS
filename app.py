@@ -109,6 +109,10 @@ def get_image_download_link(img_path):
 def main():
     st.title("STEGOSAURUS WRECKS")
 
+    # Initialize debug log
+    if "debug_log" not in st.session_state:
+        st.session_state["debug_log"] = []
+
     st.info("🦕S̷̛̤̼̥̹͚͈̓̽̂E̴̳̘͕͍̯̮͖̖͚͋̋͠Ȩ̶͕̪͈̋ͅḎ̴̮͙̯̅̿̈́͐̏ ̷̳̗̟͕͐͂͒̉̑̕T̶̡͖͕̬̺̪̼̂̋̎̾̓͠ͅḪ̷̼͈̝̯̉͆̓̔̒̿̀̈́E̷̝̰͔̺͛̋͌̂̚ ̴̡̡̳̭̹͐̉̈̑F̵̫̜͆́̄͆͑̍́͆͠U̶̪̖̖̻̫͙̓̆̓͜T̵̛͔̭͈̙̙̠̜̤̠̓́́̈̕̕Ȕ̵̜͎̘̞̯͍̦̫͖̆Ŗ̶͍͓̤̪͍̦͔͙̿Ȩ̵͈̹̬͓̝̮̟̎̓͒̀̈́🔮")
     uploaded_file = st.file_uploader("Choose an image...", type=["png", "jpg", "jpeg"])
     
@@ -157,28 +161,56 @@ def main():
 
     if st.button("Encode"):
         st.info("Processing...")
+        st.session_state["debug_log"].append(f"Encoding initiated using {encoding_plane} plane")
 
         # Compress the image before encoding to ensure it's under 900 KB
         compress_image_before_encoding(image_path, output_image_path)
 
+        success = False
+
         # If embedding text
         if option == "Text" and master_plan:
             image = Image.open(output_image_path)
-            encode_text_into_plane(image, master_plan, output_image_path, encoding_plane)
-            st.success(f"Text successfully encoded into the {encoding_plane} plane.")
-        
+            payload_size = len(master_plan.encode("utf-8"))
+            try:
+                encode_text_into_plane(image, master_plan, output_image_path, encoding_plane)
+                msg = f"Encoded {payload_size} bytes into the {encoding_plane} plane."
+                st.success(msg)
+                st.session_state["debug_log"].append(msg)
+                success = True
+            except Exception as e:
+                st.error(f"Encoding failed: {e}")
+                st.session_state["debug_log"].append(f"Encoding error: {e}")
+
         # If embedding zlib file
         elif option == "Zlib Compressed File" and uploaded_file_zlib:
             file_data = uploaded_file_zlib.read()
             image = Image.open(output_image_path)
-            encode_zlib_into_image(image, file_data, output_image_path, encoding_plane)
-            st.success(f"Zlib compressed file successfully encoded into the {encoding_plane} plane.")
-        
-        st.image(output_image_path, caption="Click the link below to download the encoded image.", use_column_width=True)
-        st.markdown(get_image_download_link(output_image_path), unsafe_allow_html=True)
+            payload_size = len(file_data)
+            try:
+                encode_zlib_into_image(image, file_data, output_image_path, encoding_plane)
+                msg = f"Encoded {payload_size} bytes into the {encoding_plane} plane."
+                st.success(msg)
+                st.session_state["debug_log"].append(msg)
+                success = True
+            except Exception as e:
+                st.error(f"Encoding failed: {e}")
+                st.session_state["debug_log"].append(f"Encoding error: {e}")
 
-        # Add balloons
-        st.balloons()
+        else:
+            st.error("No data provided for encoding.")
+            st.session_state["debug_log"].append("Encoding failed: No data provided")
+
+        if success:
+            st.image(output_image_path, caption="Click the link below to download the encoded image.", use_column_width=True)
+            st.markdown(get_image_download_link(output_image_path), unsafe_allow_html=True)
+
+            # Add balloons
+            st.balloons()
+
+    with st.sidebar.expander("Debug Log", expanded=False):
+        for entry in st.session_state["debug_log"]:
+            st.text(entry)
 
 if __name__ == "__main__":
     main()
