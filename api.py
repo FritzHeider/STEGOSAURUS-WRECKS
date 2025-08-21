@@ -5,7 +5,7 @@ import base64
 import uuid
 import os
 
-from app import (
+from stego import (
     encode_text_into_plane,
     decode_text_from_plane,
     encode_zlib_into_image,
