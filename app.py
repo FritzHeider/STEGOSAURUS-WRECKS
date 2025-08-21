@@ -108,9 +108,9 @@ def get_image_download_link(img_path):
     return href
 
 def main():
-    st.title("STEGOSAURUS WRECKS")
+    st.title("FritzTheCat")
 
-    st.info("🦕S̷̛̤̼̥̹͚͈̓̽̂E̴̳̘͕͍̯̮͖̖͚͋̋͠Ȩ̶͕̪͈̋ͅḎ̴̮͙̯̅̿̈́͐̏ ̷̳̗̟͕͐͂͒̉̑̕T̶̡͖͕̬̺̪̼̂̋̎̾̓͠ͅḪ̷̼͈̝̯̉͆̓̔̒̿̀̈́E̷̝̰͔̺͛̋͌̂̚ ̴̡̡̳̭̹͐̉̈̑F̵̫̜͆́̄͆͑̍́͆͠U̶̪̖̖̻̫͙̓̆̓͜T̵̛͔̭͈̙̙̠̜̤̠̓́́̈̕̕Ȕ̵̜͎̘̞̯͍̦̫͖̆Ŗ̶͍͓̤̪͍̦͔͙̿Ȩ̵͈̹̬͓̝̮̟̎̓͒̀̈́🔮")
+    st.info("😺 ICODETHATIAM 💥")
     uploaded_file = st.file_uploader(
         "Drag and drop base image here",
         type=["png", "jpg", "jpeg"],
