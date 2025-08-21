@@ -127,14 +127,12 @@ def main():
         unsafe_allow_html=True,
     )
 
-    st.title("STEGOSAURUS WRECKS")
+    st.title("FritzTheCat")
     st.markdown(
         "*In the Jurassic jungles of data, Stegosaurus Wrecks guards your secrets with plates of code.*"
     )
 
-    st.info(
-        "🦕S̷̛̤̼̥̹͚͈̓̽̂E̴̳̘͕͍̯̮͖̖͚͋̋͠Ȩ̶͕̪͈̋ͅḎ̴̮͙̯̅̿̈́͐̏ ̷̳̗̟͕͐͂͒̉̑̕T̶̡͖͕̬̺̪̼̂̋̎̾̓͠ͅḪ̷̼͈̝̯̉͆̓̔̒̿̀̈́E̷̝̰͔̺͛̋͌̂̚ ̴̡̡̳̭̹͐̉̈̑F̵̫̜͆́̄͆͑̍́͆͠U̶̪̖̖̻̫͙̓̆̓͜T̵̛͔̭͈̙̙̠̜̤̠̓́́̈̕̕Ȕ̵̜͎̘̞̯͍̦̫͖̆Ŗ̶͍͓̤̪͍̦͔͙̿Ȩ̵͈̹̬͓̝̮̟̎̓͒̀̈́🔮"
-    )
+    st.info("😺 I CODE THAT I AM 💥")
     uploaded_file = st.file_uploader("Choose an image...", type=["png", "jpg", "jpeg"])
     
     if uploaded_file is not None:
