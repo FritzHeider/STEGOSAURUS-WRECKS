@@ -173,30 +173,30 @@ def _extract_bits(img: Image.Image, plane: str, bits_needed: int | None = None) 
     return "".join(bits)
 
 
-# --- High-level encode/decode (length-prefixed with terminator fallback) ------
-def _frame_with_length(data: bytes) -> str:
-    """
-    Prepend a 32-bit big-endian byte-length header. Return bitstring.
-    """
+# --- High-level encode/decode (length + CRC32 checksum) -----------------------
+def _frame_with_length_crc(data: bytes) -> str:
+    """Prepend 32-bit length and CRC32 checksum, then return bitstring."""
     length = len(data)
-    header_bits = f"{length:032b}"
+    crc = zlib.crc32(data) & 0xFFFFFFFF
+    header_bits = f"{length:032b}{crc:032b}"
     return header_bits + _bytes_to_bits(data)
 
 
-def _deframe_with_length_or_terminator(all_bits: str) -> bytes:
-    """
-    First try 32-bit length header framing; if implausible, fall back to
-    scanning for a 0x00 terminator byte.
-    """
-    if len(all_bits) >= 32:
+def _deframe_with_length_crc_or_terminator(all_bits: str) -> bytes:
+    """Attempt to parse length+CRC32 framing, else fallback to 0x00 terminator."""
+    if len(all_bits) >= 64:
         declared_len = int(all_bits[:32], 2)
-        total_bits_needed = 32 + declared_len * 8
+        checksum = int(all_bits[32:64], 2)
+        total_bits_needed = 64 + declared_len * 8
         if declared_len > 0 and total_bits_needed <= len(all_bits):
-            payload_bits = all_bits[32:32 + declared_len * 8]
-            return _bits_to_bytes(payload_bits)
+            payload_bits = all_bits[64:64 + declared_len * 8]
+            payload = _bits_to_bytes(payload_bits)
+            calc = zlib.crc32(payload) & 0xFFFFFFFF
+            if calc != checksum:
+                raise ValueError("Checksum mismatch; hidden data corrupt or tampered.")
+            return payload
 
-    # Fallback: terminator 0x00
-    # Trim to full bytes
+    # Fallback: terminator 0x00 (legacy mode without integrity)
     full_bytes_len = (len(all_bits) // 8) * 8
     bytes_stream = [all_bits[i : i + 8] for i in range(0, full_bytes_len, 8)]
     out = bytearray()
@@ -212,7 +212,7 @@ def _deframe_with_length_or_terminator(all_bits: str) -> bytes:
 def encode_text_into_plane(image: Image.Image, text: str, output_path: str, plane: str = "RGB", password: str | None = None):
     """
     Embed UTF-8 text (optionally encrypted) into the selected channel plane.
-    Uses length-prefixed framing (with terminator fallback supported on decode).
+    Uses length and CRC32 framing (with terminator fallback supported on decode).
     """
     if password:
         token = encrypt_data(text.encode("utf-8"), password)  # bytes
@@ -220,7 +220,7 @@ def encode_text_into_plane(image: Image.Image, text: str, output_path: str, plan
     else:
         to_store = text.encode("utf-8")
 
-    framed_bits = _frame_with_length(to_store)
+    framed_bits = _frame_with_length_crc(to_store)
     out_img = _embed_bits(image.convert("RGBA"), framed_bits, plane)
     out_img.save(output_path, format="PNG")
 
@@ -231,20 +231,20 @@ def encode_zlib_into_image(image: Image.Image, file_data: bytes, output_path: st
     """
     compressed = zlib.compress(file_data)
     payload = encrypt_data(compressed, password) if password else compressed
-    framed_bits = _frame_with_length(payload)
+    framed_bits = _frame_with_length_crc(payload)
     out_img = _embed_bits(image.convert("RGBA"), framed_bits, plane)
     out_img.save(output_path, format="PNG")
 
 
 def decode_text_from_plane(image: Image.Image, plane: str = "RGB", password: str | None = None) -> str:
     """
-    Extract text from the selected plane. Supports both length-prefixed and
-    old terminator-framed payloads. If password is provided, expects a base64
-    wrapped, encrypted token and will decrypt it.
+    Extract text from the selected plane. Verifies length and CRC32 checksum,
+    falling back to legacy terminator-framed payloads. If password is provided,
+    expects a base64-wrapped, encrypted token and will decrypt it.
     """
     # Read all available capacity bits
     bits = _extract_bits(image, plane, bits_needed=None)
-    raw = _deframe_with_length_or_terminator(bits)
+    raw = _deframe_with_length_crc_or_terminator(bits)
 
     if password:
         try:
@@ -262,10 +262,11 @@ def decode_text_from_plane(image: Image.Image, plane: str = "RGB", password: str
 
 def decode_zlib_from_image(image: Image.Image, plane: str = "RGB", password: str | None = None) -> bytes:
     """
-    Extract binary from the selected plane, optional decrypt, then zlib decompress.
+    Extract binary from the selected plane, verify integrity, optional decrypt,
+    then zlib decompress.
     """
     bits = _extract_bits(image, plane, bits_needed=None)
-    payload = _deframe_with_length_or_terminator(bits)
+    payload = _deframe_with_length_crc_or_terminator(bits)
 
     if password:
         try:
