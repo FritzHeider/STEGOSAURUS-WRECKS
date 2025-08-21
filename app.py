@@ -47,30 +47,39 @@ def encode_text_into_plane(image, text, output_path, plane="RGB", password=None)
     if password:
         key = derive_key(password)
         payload = Fernet(key).encrypt(payload)
-    binary_text = ''.join(format(byte, '08b') for byte in payload) + '00000000'  # Add terminator
-    pixel_capacity = width * height  # Capacity per plane
 
+    payload = len(payload).to_bytes(4, "big") + payload
+    binary_text = ''.join(format(byte, '08b') for byte in payload)
+
+    channels = [c for c in "RGBA" if c in plane]
+    pixel_capacity = width * height * len(channels)
     if len(binary_text) > pixel_capacity:
         raise ValueError("The message is too long for this image.")
 
     index = 0
     for y in range(height):
         for x in range(width):
-            if index < len(binary_text):
-                r, g, b, a = img.getpixel((x, y))
+            if index >= len(binary_text):
+                break
+            r, g, b, a = img.getpixel((x, y))
 
-                # Embed into selected plane(s)
-                if 'R' in plane:
-                    r = (r & 0xFE) | int(binary_text[index])  # LSB of red
-                if 'G' in plane:
-                    g = (g & 0xFE) | int(binary_text[(index + 1) % len(binary_text)])  # LSB of green
-                if 'B' in plane:
-                    b = (b & 0xFE) | int(binary_text[(index + 2) % len(binary_text)])  # LSB of blue
-                if 'A' in plane:
-                    a = (a & 0xFE) | int(binary_text[(index + 3) % len(binary_text)])  # LSB of alpha
+            for channel in channels:
+                if index >= len(binary_text):
+                    break
+                bit = int(binary_text[index])
+                if channel == 'R':
+                    r = (r & 0xFE) | bit
+                elif channel == 'G':
+                    g = (g & 0xFE) | bit
+                elif channel == 'B':
+                    b = (b & 0xFE) | bit
+                elif channel == 'A':
+                    a = (a & 0xFE) | bit
+                index += 1
 
-                img.putpixel((x, y), (r, g, b, a))
-                index += 1 if 'A' in plane else 3  # Increment accordingly
+            img.putpixel((x, y), (r, g, b, a))
+        if index >= len(binary_text):
+            break
 
     img.save(output_path, format="PNG")
 
@@ -85,10 +94,13 @@ def encode_zlib_into_image(image, file_data, output_path, plane="RGB", password=
     if password:
         key = derive_key(password)
         payload = Fernet(key).encrypt(payload)
-    binary_data = ''.join(format(byte, '08b') for byte in payload) + '00000000'  # Add terminator
-    width, height = image.size
-    pixel_capacity = width * height  # Capacity per plane
 
+    payload = len(payload).to_bytes(4, "big") + payload
+    binary_data = ''.join(format(byte, '08b') for byte in payload)
+    width, height = image.size
+
+    channels = [c for c in "RGBA" if c in plane]
+    pixel_capacity = width * height * len(channels)
     if len(binary_data) > pixel_capacity:
         raise ValueError("The compressed data is too long for this image.")
 
@@ -96,21 +108,27 @@ def encode_zlib_into_image(image, file_data, output_path, plane="RGB", password=
     index = 0
     for y in range(height):
         for x in range(width):
-            if index < len(binary_data):
-                r, g, b, a = img.getpixel((x, y))
+            if index >= len(binary_data):
+                break
+            r, g, b, a = img.getpixel((x, y))
 
-                # Embed into selected plane(s)
-                if 'R' in plane:
-                    r = (r & 0xFE) | int(binary_data[index])  # LSB of red
-                if 'G' in plane:
-                    g = (g & 0xFE) | int(binary_data[(index + 1) % len(binary_data)])  # LSB of green
-                if 'B' in plane:
-                    b = (b & 0xFE) | int(binary_data[(index + 2) % len(binary_data)])  # LSB of blue
-                if 'A' in plane:
-                    a = (a & 0xFE) | int(binary_data[(index + 3) % len(binary_data)])  # LSB of alpha
+            for channel in channels:
+                if index >= len(binary_data):
+                    break
+                bit = int(binary_data[index])
+                if channel == 'R':
+                    r = (r & 0xFE) | bit
+                elif channel == 'G':
+                    g = (g & 0xFE) | bit
+                elif channel == 'B':
+                    b = (b & 0xFE) | bit
+                elif channel == 'A':
+                    a = (a & 0xFE) | bit
+                index += 1
 
-                img.putpixel((x, y), (r, g, b, a))
-                index += 1 if 'A' in plane else 3  # Increment accordingly
+            img.putpixel((x, y), (r, g, b, a))
+        if index >= len(binary_data):
+            break
 
     img.save(output_path, format="PNG")
 
@@ -120,34 +138,44 @@ def decode_text_from_plane(image, plane="RGB", password=None):
     img = image.convert("RGBA")
     bits = []
     width, height = img.size
+    length = None
+    required_bits = None
+
+    channels = [c for c in "RGBA" if c in plane]
     for y in range(height):
         for x in range(width):
             r, g, b, a = img.getpixel((x, y))
-            if 'R' in plane:
-                bits.append(str(r & 1))
-            if 'G' in plane:
-                bits.append(str(g & 1))
-            if 'B' in plane:
-                bits.append(str(b & 1))
-            if 'A' in plane:
-                bits.append(str(a & 1))
-            if bits[-8:] == ['0'] * 8:
-                binary_string = ''.join(bits[:-8])
-                data = bytes(int(binary_string[i:i+8], 2) for i in range(0, len(binary_string), 8))
-                if password:
-                    key = derive_key(password)
-                    try:
-                        data = Fernet(key).decrypt(data)
-                    except Exception:
-                        raise ValueError("Invalid password or corrupted data.")
-                try:
-                    digest, text = data.decode().split("::", 1)
-                except Exception:
-                    raise ValueError("Corrupted data.")
-                if hashlib.sha256(text.encode()).hexdigest() != digest:
-                    raise ValueError("Checksum mismatch.")
-                return text
-    raise ValueError("Terminator not found.")
+            channel_values = {'R': r, 'G': g, 'B': b, 'A': a}
+            for c in channels:
+                bits.append(str(channel_values[c] & 1))
+                if length is None and len(bits) == 32:
+                    length = int(''.join(bits[:32]), 2)
+                    required_bits = 32 + length * 8
+                if required_bits is not None and len(bits) >= required_bits:
+                    break
+            if required_bits is not None and len(bits) >= required_bits:
+                break
+        if required_bits is not None and len(bits) >= required_bits:
+            break
+
+    if required_bits is None or len(bits) < required_bits:
+        raise ValueError("Incomplete data.")
+
+    binary_string = ''.join(bits[32:required_bits])
+    data = bytes(int(binary_string[i:i+8], 2) for i in range(0, len(binary_string), 8))
+    if password:
+        key = derive_key(password)
+        try:
+            data = Fernet(key).decrypt(data)
+        except Exception:
+            raise ValueError("Invalid password or corrupted data.")
+    try:
+        digest, text = data.decode().split("::", 1)
+    except Exception:
+        raise ValueError("Corrupted data.")
+    if hashlib.sha256(text.encode()).hexdigest() != digest:
+        raise ValueError("Checksum mismatch.")
+    return text
 
 
 def decode_zlib_from_image(image, plane="RGB", password=None):
@@ -155,35 +183,45 @@ def decode_zlib_from_image(image, plane="RGB", password=None):
     img = image.convert("RGBA")
     bits = []
     width, height = img.size
+    length = None
+    required_bits = None
+
+    channels = [c for c in "RGBA" if c in plane]
     for y in range(height):
         for x in range(width):
             r, g, b, a = img.getpixel((x, y))
-            if 'R' in plane:
-                bits.append(str(r & 1))
-            if 'G' in plane:
-                bits.append(str(g & 1))
-            if 'B' in plane:
-                bits.append(str(b & 1))
-            if 'A' in plane:
-                bits.append(str(a & 1))
-            if bits[-8:] == ['0'] * 8:
-                binary_string = ''.join(bits[:-8])
-                data = bytes(int(binary_string[i:i+8], 2) for i in range(0, len(binary_string), 8))
-                if password:
-                    key = derive_key(password)
-                    try:
-                        data = Fernet(key).decrypt(data)
-                    except Exception:
-                        raise ValueError("Invalid password or corrupted data.")
-                try:
-                    digest, compressed = data.split(b"::", 1)
-                except Exception:
-                    raise ValueError("Corrupted data.")
-                decompressed = zlib.decompress(compressed)
-                if hashlib.sha256(decompressed).hexdigest().encode() != digest:
-                    raise ValueError("Checksum mismatch.")
-                return decompressed
-    raise ValueError("Terminator not found.")
+            channel_values = {'R': r, 'G': g, 'B': b, 'A': a}
+            for c in channels:
+                bits.append(str(channel_values[c] & 1))
+                if length is None and len(bits) == 32:
+                    length = int(''.join(bits[:32]), 2)
+                    required_bits = 32 + length * 8
+                if required_bits is not None and len(bits) >= required_bits:
+                    break
+            if required_bits is not None and len(bits) >= required_bits:
+                break
+        if required_bits is not None and len(bits) >= required_bits:
+            break
+
+    if required_bits is None or len(bits) < required_bits:
+        raise ValueError("Incomplete data.")
+
+    binary_string = ''.join(bits[32:required_bits])
+    data = bytes(int(binary_string[i:i+8], 2) for i in range(0, len(binary_string), 8))
+    if password:
+        key = derive_key(password)
+        try:
+            data = Fernet(key).decrypt(data)
+        except Exception:
+            raise ValueError("Invalid password or corrupted data.")
+    try:
+        digest, compressed = data.split(b"::", 1)
+    except Exception:
+        raise ValueError("Corrupted data.")
+    decompressed = zlib.decompress(compressed)
+    if hashlib.sha256(decompressed).hexdigest().encode() != digest:
+        raise ValueError("Checksum mismatch.")
+    return decompressed
 
 def get_image_download_link(img_path):
     """
