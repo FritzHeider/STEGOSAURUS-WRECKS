@@ -5,9 +5,16 @@ import base64
 import zlib
 import hashlib
 from typing import Iterable, List, Tuple
+import logging
 
 import streamlit as st
 from PIL import Image
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
+)
+logger = logging.getLogger(__name__)
 
 # --- Optional share integration (gated) ---------------------------------------
 try:
@@ -372,21 +379,28 @@ def main():
 
         if st.button("Encode", type="primary", disabled=(image_input is None)):
             try:
-                st.info("Processing...")
-                compress_image_before_encoding(image_input, output_image_path)
+                logger.debug(
+                    "Starting encode: option=%s plane=%s output=%s",
+                    option,
+                    encoding_plane,
+                    output_image_path,
+                )
+                with st.spinner("Compressing image..."):
+                    compress_image_before_encoding(image_input, output_image_path)
 
                 if option == "Text":
                     if not master_plan:
                         st.error("No text provided for encoding.")
                     else:
-                        image = Image.open(output_image_path)
-                        encode_text_into_plane(
-                            image=image,
-                            text=master_plan,
-                            output_path=output_image_path,
-                            plane=encoding_plane,
-                            password=(password or None),
-                        )
+                        with st.spinner("Embedding text..."):
+                            image = Image.open(output_image_path)
+                            encode_text_into_plane(
+                                image=image,
+                                text=master_plan,
+                                output_path=output_image_path,
+                                plane=encoding_plane,
+                                password=(password or None),
+                            )
                         st.success(f"Text successfully encoded into the {encoding_plane} plane.")
                         st.image(output_image_path, caption="Encoded image", use_container_width=True)
                         st.markdown(get_image_download_link(output_image_path), unsafe_allow_html=True)
@@ -397,22 +411,31 @@ def main():
                         st.error("No file uploaded for embedding.")
                     else:
                         file_data = uploaded_file_zlib.read()
-                        image = Image.open(output_image_path)
-                        encode_zlib_into_image(
-                            image=image,
-                            file_data=file_data,
-                            output_path=output_image_path,
-                            plane=encoding_plane,
-                            password=(password or None),
-                        )
+                        with st.spinner("Embedding file..."):
+                            image = Image.open(output_image_path)
+                            encode_zlib_into_image(
+                                image=image,
+                                file_data=file_data,
+                                output_path=output_image_path,
+                                plane=encoding_plane,
+                                password=(password or None),
+                            )
                         st.success(f"Zlib-compressed file successfully encoded into the {encoding_plane} plane.")
                         st.image(output_image_path, caption="Encoded image", use_container_width=True)
                         st.markdown(get_image_download_link(output_image_path), unsafe_allow_html=True)
                         st.session_state["last_output"] = output_image_path
 
                 st.balloons()
+            except ValueError as e:
+                logger.warning("Encoding error: %s", e)
+                msg = str(e)
+                if "Payload too large" in msg:
+                    st.error("The data is too large for the selected image or color plane.")
+                else:
+                    st.error(msg)
             except Exception as e:
-                st.error(str(e))
+                logger.exception("Unexpected error during encoding")
+                st.error("An unexpected error occurred during encoding.")
 
     else:  # Decode
         password = st.text_input("Password (optional)", type="password")
@@ -428,31 +451,54 @@ def main():
 
         if st.button("Decode", type="primary", disabled=(image_input is None)):
             try:
-                image = Image.open(image_input)
+                logger.debug(
+                    "Starting decode: option=%s plane=%s",
+                    decoding_option,
+                    decoding_plane,
+                )
+                with st.spinner("Loading image..."):
+                    image = Image.open(image_input)
                 if decoding_option == "Text":
-                    extracted_text = decode_text_from_plane(image, decoding_plane, password or None)
+                    with st.spinner("Extracting text..."):
+                        extracted_text = decode_text_from_plane(image, decoding_plane, password or None)
                     st.success("Hidden text extracted:")
                     st.text_area("Decoded Text:", extracted_text, height=240)
                 else:
-                    data = decode_zlib_from_image(image, decoding_plane, password or None)
+                    with st.spinner("Extracting file..."):
+                        data = decode_zlib_from_image(image, decoding_plane, password or None)
                     st.success("Hidden file extracted.")
                     st.download_button("Download decoded file", data, file_name="decoded.bin")
             except ValueError as e:
-                st.error(str(e))
+                logger.warning("Decoding error: %s", e)
+                msg = str(e)
+                if "Failed to decrypt" in msg:
+                    st.error("Incorrect password or corrupted data.")
+                elif "Hidden text is not valid UTF-8" in msg:
+                    st.error("Decoded text is not valid UTF-8. It might be encrypted or corrupted.")
+                elif "No hidden payload" in msg:
+                    st.error("No hidden data found in the image.")
+                elif "Failed to decompress" in msg:
+                    st.error("Could not decompress the hidden file. It may be corrupted or use a wrong password.")
+                else:
+                    st.error(msg)
             except Exception as e:
-                st.error(f"Unexpected error: {e}")
+                logger.exception("Unexpected error during decoding")
+                st.error("An unexpected error occurred during decoding.")
 
     st.markdown("---")
     if st.session_state.get("last_output") and HAVE_SHARE:
         if st.button("Share"):
             try:
-                share_id = create_share(st.session_state["last_output"])
+                logger.debug("Creating share for %s", st.session_state["last_output"])
+                with st.spinner("Creating share link..."):
+                    share_id = create_share(st.session_state["last_output"])
                 share_url = f"http://localhost:8000/share/{share_id}"
                 twitter_url = f"https://twitter.com/intent/tweet?url={share_url}"
                 st.success(f"Share link: {share_url}")
                 st.markdown(f"[Tweet this]({twitter_url})")
             except Exception as e:
-                st.error(str(e))
+                logger.exception("Share creation failed")
+                st.error("Failed to create share link.")
     elif st.session_state.get("last_output") and not HAVE_SHARE:
         st.caption("Sharing is disabled (share_utils not available).")
 
