@@ -42,13 +42,23 @@ def main():
 
     mode = st.radio("Mode", ["Encode", "Decode"])
 
-    uploaded_file = st.file_uploader("Choose an image...", type=["png", "jpg", "jpeg"])
-    if uploaded_file is not None:
-        image_input = uploaded_file
-        st.image(image_input, caption="Input image preview", use_container_width=True)
+    uploaded_files = st.file_uploader(
+        "Choose image(s)...",
+        type=["png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+    )
+    image_input = None
+    if uploaded_files:
+        if mode == "Encode":
+            image_input = uploaded_files[0]
+            st.image(image_input, caption="Input image preview", use_container_width=True)
+        else:
+            image_input = uploaded_files
+            for uf in uploaded_files:
+                st.image(uf, caption="Input image", use_container_width=True)
     else:
         default_image_path = "stegg.png"
-        if os.path.exists(default_image_path):
+        if mode == "Encode" and os.path.exists(default_image_path):
             image_input = default_image_path
             st.image(
                 image_input,
@@ -56,7 +66,6 @@ def main():
                 use_container_width=True,
             )
         else:
-            image_input = None
             st.warning("No image selected and default 'stegg.png' not found. Please upload an image.")
 
     st.markdown("---")
@@ -107,6 +116,12 @@ def main():
             ["RGB", "R", "G", "B", "A"],
             help="Which channel(s) to use for embedding.",
         )
+        target_kb = st.number_input(
+            "Target image size (KB)",
+            min_value=1,
+            value=900,
+            help="Compress/quantize until the image is below this size.",
+        )
 
         if st.button("Encode", type="primary", disabled=(image_input is None)):
             try:
@@ -119,12 +134,13 @@ def main():
                 compress_image_before_encoding(image_input, output_image_path)
                 progress.progress(40)
 
+
                 if option == "Text":
                     if not master_plan:
                         st.error("No text provided for encoding.")
                     else:
                         image = Image.open(output_image_path)
-                        encode_text_into_plane(
+                        paths = encode_text_into_plane(
                             image=image,
                             text=master_plan,
                             output_path=output_image_path,
@@ -140,13 +156,14 @@ def main():
                             st.markdown(get_image_download_link(output_image_path), unsafe_allow_html=True)
                             st.session_state["last_output"] = output_image_path
 
+
                 else:
                     if not uploaded_file_zlib:
                         st.error("No file uploaded for embedding.")
                     else:
                         file_data = uploaded_file_zlib.read()
                         image = Image.open(output_image_path)
-                        encode_zlib_into_image(
+                        paths = encode_zlib_into_image(
                             image=image,
                             file_data=file_data,
                             output_path=output_image_path,
@@ -155,7 +172,7 @@ def main():
                         )
                         progress.progress(80)
                         st.success(
-                            f"Zlib-compressed file successfully encoded into the {encoding_plane} plane."
+                            f"Zlib-compressed file successfully encoded into {len(paths)} image(s) using the {encoding_plane} plane."
                         )
                         st.image(output_image_path, caption="Encoded image", use_container_width=True)
                         progress.progress(100)
@@ -163,6 +180,7 @@ def main():
                         if st.button("Finalize & Download"):
                             st.markdown(get_image_download_link(output_image_path), unsafe_allow_html=True)
                             st.session_state["last_output"] = output_image_path
+
 
                 st.balloons()
             except Exception as e:
@@ -195,6 +213,7 @@ def main():
                     data = decode_zlib_from_image(image, decoding_plane, password or None)
                     progress.progress(90)
                     st.success("Hidden file extracted. Review before downloading.")
+
                     st.download_button("Download decoded file", data, file_name="decoded.bin")
                 progress.progress(100)
             except ValueError as e:
