@@ -16,3 +16,4 @@ def test_encode_decode_roundtrip(tmp_path):
     out_img = Image.open(out_path)
     decoded = decode_text_from_plane(out_img, plane="RGB", password="secret")
     assert decoded == text
+ 
