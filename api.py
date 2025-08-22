@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import FileResponse
 from PIL import Image
 import base64
@@ -11,13 +11,18 @@ from app import (
     encode_zlib_into_image,
     decode_zlib_from_image,
 )
-from share_utils import increment_share
+from share_utils import increment_share, create_share
 
 app = FastAPI()
 
 
 @app.post("/encode/text")
-async def encode_text(image: UploadFile = File(...), text: str = Form(...), plane: str = Form("RGB")):
+async def encode_text(
+    request: Request,
+    image: UploadFile = File(...),
+    text: str = Form(...),
+    plane: str = Form("RGB"),
+):
     data = await image.read()
     temp_in = f"/tmp/{uuid.uuid4()}_{image.filename}"
     with open(temp_in, "wb") as f:
@@ -27,9 +32,14 @@ async def encode_text(image: UploadFile = File(...), text: str = Form(...), plan
     encode_text_into_plane(img, text, temp_out, plane)
     with open(temp_out, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
+    # create share link
+    share_id = create_share(temp_out)
+    base = str(request.base_url).rstrip("/")
+    share_url = f"{base}/share/{share_id}"
+    tweet_url = f"https://twitter.com/intent/tweet?url={share_url}"
     os.remove(temp_in)
     os.remove(temp_out)
-    return {"image_base64": b64}
+    return {"image_base64": b64, "share_url": share_url, "tweet_url": tweet_url}
 
 
 @app.post("/decode/text")
@@ -45,7 +55,12 @@ async def decode_text(image: UploadFile = File(...), plane: str = Form("RGB")):
 
 
 @app.post("/encode/zlib")
-async def encode_zlib(image: UploadFile = File(...), file: UploadFile = File(...), plane: str = Form("RGB")):
+async def encode_zlib(
+    request: Request,
+    image: UploadFile = File(...),
+    file: UploadFile = File(...),
+    plane: str = Form("RGB"),
+):
     image_bytes = await image.read()
     tmp_img = f"/tmp/{uuid.uuid4()}_{image.filename}"
     with open(tmp_img, "wb") as f:
@@ -56,9 +71,13 @@ async def encode_zlib(image: UploadFile = File(...), file: UploadFile = File(...
     encode_zlib_into_image(img, file_bytes, tmp_out, plane)
     with open(tmp_out, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
+    share_id = create_share(tmp_out)
+    base = str(request.base_url).rstrip("/")
+    share_url = f"{base}/share/{share_id}"
+    tweet_url = f"https://twitter.com/intent/tweet?url={share_url}"
     os.remove(tmp_img)
     os.remove(tmp_out)
-    return {"image_base64": b64}
+    return {"image_base64": b64, "share_url": share_url, "tweet_url": tweet_url}
 
 
 @app.post("/decode/zlib")
