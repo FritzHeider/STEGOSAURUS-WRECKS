@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import base64
 import zlib
-from typing import List
+from typing import Iterable, List
 
 from PIL import Image
 
@@ -27,21 +27,25 @@ def convert_to_png(image_path):
 
 
 def compress_image_before_encoding(src_image, output_image_path: str, max_kb: int = 900):
-    """Save image as PNG and iteratively downscale by 50% until under max_kb."""
+    """
+    Save image as PNG and then progressively quantize the color palette until
+    the file is under ``max_kb``. This preserves dimensions by reducing color
+    depth instead of halving resolution on each iteration.
+    """
     if hasattr(src_image, "seek"):
         try:
             src_image.seek(0)
         except Exception:
             pass
-    img = Image.open(src_image).convert("RGBA")
-    img.save(output_image_path, optimize=True, format="PNG")
+    base_img = Image.open(src_image).convert("RGBA")
 
-    while os.path.getsize(output_image_path) > max_kb * 1024:
-        img = Image.open(output_image_path).convert("RGBA")
-        if img.width <= 16 or img.height <= 16:
-            break
-        img = img.resize((max(16, img.width // 2), max(16, img.height // 2)))
+    palette = 256
+    while True:
+        img = base_img.quantize(colors=palette).convert("RGBA")
         img.save(output_image_path, optimize=True, format="PNG")
+        if os.path.getsize(output_image_path) <= max_kb * 1024 or palette <= 2:
+            break
+        palette = max(2, palette // 2)
 
 
 # --- LSB stego core -----------------------------------------------------------
@@ -88,6 +92,28 @@ def _embed_bits(img: Image.Image, bits: str, plane: str) -> Image.Image:
     return img
 
 
+def _embed_bits_across_images(
+    img: Image.Image, bits: str, plane: str, output_path: str
+) -> List[str]:
+    """Embed ``bits`` across multiple copies of ``img`` if needed.
+
+    The first chunk is written to ``output_path``. Subsequent chunks append
+    ``_partN`` before the extension. Returns list of paths.
+    """
+    channels = _channels_for_plane(plane)
+    capacity = img.width * img.height * len(channels)
+    chunks = [bits[i : i + capacity] for i in range(0, len(bits), capacity)]
+
+    base, ext = os.path.splitext(output_path)
+    paths: List[str] = []
+    for idx, chunk in enumerate(chunks):
+        out_img = _embed_bits(img.copy(), chunk, plane)
+        path = output_path if idx == 0 else f"{base}_part{idx + 1}{ext}"
+        out_img.save(path, format="PNG")
+        paths.append(path)
+    return paths
+
+
 def _extract_bits(img: Image.Image, plane: str, bits_needed: int | None = None) -> str:
     img = img.convert("RGBA")
     width, height = img.size
@@ -102,6 +128,14 @@ def _extract_bits(img: Image.Image, plane: str, bits_needed: int | None = None) 
                 if bits_needed is not None and len(bits) >= bits_needed:
                     return "".join(bits)
     return "".join(bits)
+
+
+def _extract_bits_from_images(images: Iterable[Image.Image], plane: str) -> str:
+    """Concatenate bits extracted from each image in ``images`` sequentially."""
+    collected: List[str] = []
+    for img in images:
+        collected.append(_extract_bits(img, plane, bits_needed=None))
+    return "".join(collected)
 
 
 # --- High-level encode/decode -------------------------------------------------
@@ -137,7 +171,8 @@ def encode_text_into_plane(
     output_path: str,
     plane: str = "RGB",
     password: str | None = None,
-):
+) -> List[str]:
+    """Embed UTF-8 text and return list of output image paths."""
     if password:
         token = encrypt_data(text.encode("utf-8"), password)
         to_store = base64.b64encode(token)
@@ -145,8 +180,7 @@ def encode_text_into_plane(
         to_store = text.encode("utf-8")
 
     framed_bits = _frame_with_length(to_store)
-    out_img = _embed_bits(image.convert("RGBA"), framed_bits, plane)
-    out_img.save(output_path, format="PNG")
+    return _embed_bits_across_images(image.convert("RGBA"), framed_bits, plane, output_path)
 
 
 def encode_zlib_into_image(
@@ -155,20 +189,26 @@ def encode_zlib_into_image(
     output_path: str,
     plane: str = "RGB",
     password: str | None = None,
-):
+) -> List[str]:
+    """Compress (zlib) -> optional encrypt -> embed, returning output paths."""
     compressed = zlib.compress(file_data)
     payload = encrypt_data(compressed, password) if password else compressed
     framed_bits = _frame_with_length(payload)
-    out_img = _embed_bits(image.convert("RGBA"), framed_bits, plane)
-    out_img.save(output_path, format="PNG")
+    return _embed_bits_across_images(image.convert("RGBA"), framed_bits, plane, output_path)
 
 
 def decode_text_from_plane(
-    image: Image.Image,
+    images: Iterable[Image.Image] | Image.Image,
     plane: str = "RGB",
     password: str | None = None,
 ) -> str:
-    bits = _extract_bits(image, plane, bits_needed=None)
+    """Decode text from one or more images."""
+    if isinstance(images, Image.Image):
+        images_seq = [images]
+    else:
+        images_seq = list(images)
+
+    bits = _extract_bits_from_images(images_seq, plane)
     raw = _deframe_with_length_or_terminator(bits)
 
     if password:
@@ -186,11 +226,17 @@ def decode_text_from_plane(
 
 
 def decode_zlib_from_image(
-    image: Image.Image,
+    images: Iterable[Image.Image] | Image.Image,
     plane: str = "RGB",
     password: str | None = None,
 ) -> bytes:
-    bits = _extract_bits(image, plane, bits_needed=None)
+    """Decode binary data from one or more images."""
+    if isinstance(images, Image.Image):
+        images_seq = [images]
+    else:
+        images_seq = list(images)
+
+    bits = _extract_bits_from_images(images_seq, plane)
     payload = _deframe_with_length_or_terminator(bits)
 
     if password:
