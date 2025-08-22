@@ -164,29 +164,6 @@ def _embed_bits(img: Image.Image, bits: str, plane: str) -> Image.Image:
     return img  # exact fit
 
 
-def _embed_bits_across_images(
-    img: Image.Image, bits: str, plane: str, output_path: str
-) -> List[str]:
-    """Embed ``bits`` across one or more copies of ``img``.
-
-    The first chunk is written to ``output_path``; subsequent chunks append
-    ``_partN`` before the file extension.
-    Returns the list of file paths written.
-    """
-    channels = _channels_for_plane(plane)
-    capacity = img.width * img.height * len(channels)
-    chunks = [bits[i : i + capacity] for i in range(0, len(bits), capacity)]
-
-    base, ext = os.path.splitext(output_path)
-    paths: List[str] = []
-    for idx, chunk in enumerate(chunks):
-        out_img = _embed_bits(img.copy(), chunk, plane)
-        path = output_path if idx == 0 else f"{base}_part{idx + 1}{ext}"
-        out_img.save(path, format="PNG")
-        paths.append(path)
-    return paths
-
-
 def _extract_bits(
     img: Image.Image, plane: str, bits_needed: int | None = None
 ) -> str:
@@ -208,14 +185,6 @@ def _extract_bits(
                 if bits_needed is not None and len(bits) >= bits_needed:
                     return "".join(bits)
     return "".join(bits)
-
-
-def _extract_bits_from_images(images: Iterable[Image.Image], plane: str) -> str:
-    """Concatenate bits extracted from each image in ``images`` sequentially."""
-    collected: List[str] = []
-    for img in images:
-        collected.append(_extract_bits(img, plane, bits_needed=None))
-    return "".join(collected)
 
 
 # --- High-level encode/decode (length + CRC32 checksum with legacy fallback) --
@@ -276,7 +245,20 @@ def encode_text_into_plane(
         to_store = text.encode("utf-8")
 
     framed_bits = _frame_with_length_crc(to_store)
-    return _embed_bits_across_images(image.convert("RGBA"), framed_bits, plane, output_path)
+
+    img = image.convert("RGBA")
+    channels = _channels_for_plane(plane)
+    capacity = img.width * img.height * len(channels)
+    chunks = [framed_bits[i : i + capacity] for i in range(0, len(framed_bits), capacity)]
+
+    base, ext = os.path.splitext(output_path)
+    paths: List[str] = []
+    for idx, chunk in enumerate(chunks):
+        out_img = _embed_bits(img.copy(), chunk, plane)
+        path = output_path if idx == 0 else f"{base}_part{idx + 1}{ext}"
+        out_img.save(path, format="PNG")
+        paths.append(path)
+    return paths
 
 
 def encode_zlib_into_image(
@@ -294,7 +276,20 @@ def encode_zlib_into_image(
     compressed = zlib.compress(file_data)
     payload = encrypt_data(compressed, password) if password else compressed
     framed_bits = _frame_with_length_crc(payload)
-    return _embed_bits_across_images(image.convert("RGBA"), framed_bits, plane, output_path)
+
+    img = image.convert("RGBA")
+    channels = _channels_for_plane(plane)
+    capacity = img.width * img.height * len(channels)
+    chunks = [framed_bits[i : i + capacity] for i in range(0, len(framed_bits), capacity)]
+
+    base, ext = os.path.splitext(output_path)
+    paths: List[str] = []
+    for idx, chunk in enumerate(chunks):
+        out_img = _embed_bits(img.copy(), chunk, plane)
+        path = output_path if idx == 0 else f"{base}_part{idx + 1}{ext}"
+        out_img.save(path, format="PNG")
+        paths.append(path)
+    return paths
 
 
 def decode_text_from_plane(
@@ -313,7 +308,10 @@ def decode_text_from_plane(
     else:
         images_seq = list(images)
 
-    bits = _extract_bits_from_images(images_seq, plane)
+    bits_collected: List[str] = []
+    for img in images_seq:
+        bits_collected.append(_extract_bits(img, plane, bits_needed=None))
+    bits = "".join(bits_collected)
     raw = _deframe_with_length_crc_or_terminator(bits)
 
     if password:
@@ -342,7 +340,10 @@ def decode_zlib_from_image(
     else:
         images_seq = list(images)
 
-    bits = _extract_bits_from_images(images_seq, plane)
+    bits_collected: List[str] = []
+    for img in images_seq:
+        bits_collected.append(_extract_bits(img, plane, bits_needed=None))
+    bits = "".join(bits_collected)
     payload = _deframe_with_length_crc_or_terminator(bits)
 
     if password:
