@@ -6,7 +6,7 @@ import uuid
 import os
 from typing import List
 
-from app import (
+from stego import (
     encode_text_into_plane,
     decode_text_from_plane,
     encode_zlib_into_image,

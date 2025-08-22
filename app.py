@@ -4,10 +4,17 @@ import os
 import base64
 import zlib
 import hashlib
-from typing import Iterable, List, Tuple
+from typing import Iterable, List
+import logging
 
 import streamlit as st
 from PIL import Image
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
+)
+logger = logging.getLogger(__name__)
 
 # --- Optional share integration (gated) ---------------------------------------
 try:
@@ -15,6 +22,7 @@ try:
     HAVE_SHARE = True
 except Exception:
     HAVE_SHARE = False
+
     def create_share(_path: str) -> str:
         raise RuntimeError("share_utils not installed; sharing disabled.")
 
@@ -137,7 +145,9 @@ def _embed_bits(img: Image.Image, bits: str, plane: str) -> Image.Image:
     channels = _channels_for_plane(plane)
     capacity = width * height * len(channels)
     if len(bits) > capacity:
-        raise ValueError(f"Payload too large for image/channel capacity ({len(bits)} bits > {capacity} bits).")
+        raise ValueError(
+            f"Payload too large for image/channel capacity ({len(bits)} bits > {capacity} bits)."
+        )
 
     idx = 0
     for y in range(height):
@@ -177,7 +187,9 @@ def _embed_bits_across_images(
     return paths
 
 
-def _extract_bits(img: Image.Image, plane: str, bits_needed: int | None = None) -> str:
+def _extract_bits(
+    img: Image.Image, plane: str, bits_needed: int | None = None
+) -> str:
     """
     Extract bits in the same channel order used by _embed_bits.
     If bits_needed is provided, stop when that many bits have been collected.
@@ -206,30 +218,31 @@ def _extract_bits_from_images(images: Iterable[Image.Image], plane: str) -> str:
     return "".join(collected)
 
 
-# --- High-level encode/decode (length-prefixed with terminator fallback) ------
-def _frame_with_length(data: bytes) -> str:
-    """
-    Prepend a 32-bit big-endian byte-length header. Return bitstring.
-    """
+# --- High-level encode/decode (length + CRC32 checksum with legacy fallback) --
+
+def _frame_with_length_crc(data: bytes) -> str:
+    """Prepend 32-bit length and CRC32 checksum, then return bitstring."""
     length = len(data)
-    header_bits = f"{length:032b}"
+    crc = zlib.crc32(data) & 0xFFFFFFFF
+    header_bits = f"{length:032b}{crc:032b}"
     return header_bits + _bytes_to_bits(data)
 
 
-def _deframe_with_length_or_terminator(all_bits: str) -> bytes:
-    """
-    First try 32-bit length header framing; if implausible, fall back to
-    scanning for a 0x00 terminator byte.
-    """
-    if len(all_bits) >= 32:
+def _deframe_with_length_crc_or_terminator(all_bits: str) -> bytes:
+    """Attempt to parse length+CRC32 framing, else fallback to 0x00 terminator."""
+    if len(all_bits) >= 64:
         declared_len = int(all_bits[:32], 2)
-        total_bits_needed = 32 + declared_len * 8
+        checksum = int(all_bits[32:64], 2)
+        total_bits_needed = 64 + declared_len * 8
         if declared_len > 0 and total_bits_needed <= len(all_bits):
-            payload_bits = all_bits[32:32 + declared_len * 8]
-            return _bits_to_bytes(payload_bits)
+            payload_bits = all_bits[64 : 64 + declared_len * 8]
+            payload = _bits_to_bytes(payload_bits)
+            calc = zlib.crc32(payload) & 0xFFFFFFFF
+            if calc != checksum:
+                raise ValueError("Checksum mismatch; hidden data corrupt or tampered.")
+            return payload
 
-    # Fallback: terminator 0x00
-    # Trim to full bytes
+    # Fallback: terminator 0x00 (legacy mode without integrity)
     full_bytes_len = (len(all_bits) // 8) * 8
     bytes_stream = [all_bits[i : i + 8] for i in range(0, full_bytes_len, 8)]
     out = bytearray()
@@ -241,6 +254,8 @@ def _deframe_with_length_or_terminator(all_bits: str) -> bytes:
         raise ValueError("No hidden payload found.")
     return bytes(out)
 
+
+# --- Public API ---------------------------------------------------------------
 
 def encode_text_into_plane(
     image: Image.Image,
@@ -260,7 +275,7 @@ def encode_text_into_plane(
     else:
         to_store = text.encode("utf-8")
 
-    framed_bits = _frame_with_length(to_store)
+    framed_bits = _frame_with_length_crc(to_store)
     return _embed_bits_across_images(image.convert("RGBA"), framed_bits, plane, output_path)
 
 
@@ -271,14 +286,14 @@ def encode_zlib_into_image(
     plane: str = "RGB",
     password: str | None = None,
 ) -> List[str]:
-    """Compress (zlib) -> optional encrypt -> embed (length-prefixed).
+    """Compress (zlib) -> optional encrypt -> embed (length+CRC).
 
     Payloads larger than a single image's capacity are split across multiple
     images. Returns the list of output paths.
     """
     compressed = zlib.compress(file_data)
     payload = encrypt_data(compressed, password) if password else compressed
-    framed_bits = _frame_with_length(payload)
+    framed_bits = _frame_with_length_crc(payload)
     return _embed_bits_across_images(image.convert("RGBA"), framed_bits, plane, output_path)
 
 
@@ -289,8 +304,8 @@ def decode_text_from_plane(
 ) -> str:
     """Extract text from one or more images.
 
-    Supports both length-prefixed and old terminator-framed payloads. If
-    ``password`` is provided, expects a base64 wrapped, encrypted token and will
+    Supports length+CRC32 framing and legacy terminator-framed payloads. If
+    ``password`` is provided, expects a base64-wrapped, encrypted token and will
     decrypt it.
     """
     if isinstance(images, Image.Image):
@@ -299,7 +314,7 @@ def decode_text_from_plane(
         images_seq = list(images)
 
     bits = _extract_bits_from_images(images_seq, plane)
-    raw = _deframe_with_length_or_terminator(bits)
+    raw = _deframe_with_length_crc_or_terminator(bits)
 
     if password:
         try:
@@ -320,15 +335,15 @@ def decode_zlib_from_image(
     plane: str = "RGB",
     password: str | None = None,
 ) -> bytes:
-    """Extract binary from one or more images, optionally decrypt, then zlib
-    decompress."""
+    """Extract binary from one or more images, optional decrypt, then zlib.
+    """
     if isinstance(images, Image.Image):
         images_seq = [images]
     else:
         images_seq = list(images)
 
     bits = _extract_bits_from_images(images_seq, plane)
-    payload = _deframe_with_length_or_terminator(bits)
+    payload = _deframe_with_length_crc_or_terminator(bits)
 
     if password:
         try:
@@ -343,6 +358,7 @@ def decode_zlib_from_image(
 
 
 # --- Download helper ----------------------------------------------------------
+
 def get_image_download_link(img_path: str) -> str:
     """
     Generates an HTML download link for the encoded image (PNG).
@@ -355,6 +371,7 @@ def get_image_download_link(img_path: str) -> str:
 
 
 # --- Streamlit UI -------------------------------------------------------------
+
 def main():
     st.title("FritzTheCat")
     st.info("😺 I CODE THAT I AM 💥")
@@ -387,7 +404,7 @@ def main():
         password = st.text_input("Password (optional)", type="password")
         enable_jailbreak = st.checkbox(
             "Enable Jailbreak Text",
-            help="Toggle to auto-populate with the special text to embed (for demos)."
+            help="Toggle to auto-populate with the special text to embed (for demos).",
         )
 
         default_master_plan = (
@@ -401,7 +418,7 @@ def main():
         option = st.radio(
             "Select what you want to embed:",
             ["Text", "Zlib Compressed File"],
-            help="Choose between embedding text or a compressed binary file."
+            help="Choose between embedding text or a compressed binary file.",
         )
 
         if option == "Text":
@@ -409,19 +426,19 @@ def main():
                 master_plan = st.text_area(
                     "Edit the Jailbreak Text:",
                     default_master_plan,
-                    help="This is the special text you can embed into the image."
+                    help="This is the special text you can embed into the image.",
                 )
             else:
                 master_plan = st.text_area(
                     "Enter text to encode into the image:",
                     "",
-                    help="Enter the text you want to hide."
+                    help="Enter the text you want to hide.",
                 )
         else:
             uploaded_file_zlib = st.file_uploader(
                 "Upload a file to embed (it will be zlib compressed):",
                 type=None,
-                help="Any file; it will be compressed and hidden."
+                help="Any file; it will be compressed and hidden.",
             )
 
         encoding_plane = st.selectbox(
@@ -448,21 +465,28 @@ def main():
 
         if st.button("Encode", type="primary", disabled=(image_input is None)):
             try:
-                st.info("Processing...")
-                compress_image_before_encoding(image_input, output_image_path, max_kb=target_kb)
+                logger.debug(
+                    "Starting encode: option=%s plane=%s output=%s",
+                    option,
+                    encoding_plane,
+                    output_image_path,
+                )
+                with st.spinner("Compressing image..."):
+                    compress_image_before_encoding(image_input, output_image_path, max_kb=int(target_kb))
 
                 if option == "Text":
                     if not master_plan:
                         st.error("No text provided for encoding.")
                     else:
-                        image = Image.open(output_image_path)
-                        paths = encode_text_into_plane(
-                            image=image,
-                            text=master_plan,
-                            output_path=output_image_path,
-                            plane=encoding_plane,
-                            password=(password or None),
-                        )
+                        with st.spinner("Embedding text..."):
+                            image = Image.open(output_image_path)
+                            paths = encode_text_into_plane(
+                                image=image,
+                                text=master_plan,
+                                output_path=output_image_path,
+                                plane=encoding_plane,
+                                password=(password or None),
+                            )
                         st.success(
                             f"Text successfully encoded into {len(paths)} image(s) using the {encoding_plane} plane."
                         )
@@ -470,20 +494,20 @@ def main():
                             st.image(p, caption=f"Encoded image {i}", use_container_width=True)
                             st.markdown(get_image_download_link(p), unsafe_allow_html=True)
                         st.session_state["last_output"] = paths[0]
-
                 else:
                     if not uploaded_file_zlib:
                         st.error("No file uploaded for embedding.")
                     else:
                         file_data = uploaded_file_zlib.read()
-                        image = Image.open(output_image_path)
-                        paths = encode_zlib_into_image(
-                            image=image,
-                            file_data=file_data,
-                            output_path=output_image_path,
-                            plane=encoding_plane,
-                            password=(password or None),
-                        )
+                        with st.spinner("Embedding file..."):
+                            image = Image.open(output_image_path)
+                            paths = encode_zlib_into_image(
+                                image=image,
+                                file_data=file_data,
+                                output_path=output_image_path,
+                                plane=encoding_plane,
+                                password=(password or None),
+                            )
                         st.success(
                             f"Zlib-compressed file successfully encoded into {len(paths)} image(s) using the {encoding_plane} plane."
                         )
@@ -493,55 +517,90 @@ def main():
                         st.session_state["last_output"] = paths[0]
 
                 st.balloons()
-            except Exception as e:
-                st.error(str(e))
+            except ValueError as e:
+                logger.warning("Encoding error: %s", e)
+                msg = str(e)
+                if "Payload too large" in msg:
+                    st.error("The data is too large for the selected image or color plane.")
+                else:
+                    st.error(msg)
+            except Exception:
+                logger.exception("Unexpected error during encoding")
+                st.error("An unexpected error occurred during encoding.")
 
     else:  # Decode
         password = st.text_input("Password (optional)", type="password")
         decoding_option = st.radio(
             "Select what you want to decode:",
             ["Text", "Zlib Compressed File"],
-            help="Extract hidden text or a compressed file."
+            help="Extract hidden text or a compressed file.",
         )
         decoding_plane = st.selectbox(
             "Select the color plane used for embedding:",
-            ["RGB", "R", "G", "B", "A"]
+            ["RGB", "R", "G", "B", "A"],
         )
 
         if st.button("Decode", type="primary", disabled=(image_input is None)):
             try:
+                logger.debug(
+                    "Starting decode: option=%s plane=%s",
+                    decoding_option,
+                    decoding_plane,
+                )
+                # Normalize to list[Image.Image]
                 if isinstance(image_input, list):
-                    imgs = []
+                    imgs: List[Image.Image] = []
                     for f in image_input:
                         if hasattr(f, "seek"):
-                            f.seek(0)
+                            try:
+                                f.seek(0)
+                            except Exception:
+                                pass
                         imgs.append(Image.open(f))
                 else:
-                    imgs = Image.open(image_input)
+                    imgs = [Image.open(image_input)]
+
                 if decoding_option == "Text":
-                    extracted_text = decode_text_from_plane(imgs, decoding_plane, password or None)
+                    with st.spinner("Extracting text..."):
+                        extracted_text = decode_text_from_plane(imgs, decoding_plane, password or None)
                     st.success("Hidden text extracted:")
                     st.text_area("Decoded Text:", extracted_text, height=240)
                 else:
-                    data = decode_zlib_from_image(imgs, decoding_plane, password or None)
+                    with st.spinner("Extracting file..."):
+                        data = decode_zlib_from_image(imgs, decoding_plane, password or None)
                     st.success("Hidden file extracted.")
                     st.download_button("Download decoded file", data, file_name="decoded.bin")
             except ValueError as e:
-                st.error(str(e))
-            except Exception as e:
-                st.error(f"Unexpected error: {e}")
+                logger.warning("Decoding error: %s", e)
+                msg = str(e)
+                if "Failed to decrypt" in msg:
+                    st.error("Incorrect password or corrupted data.")
+                elif "Hidden text is not valid UTF-8" in msg:
+                    st.error("Decoded text is not valid UTF-8. It might be encrypted or corrupted.")
+                elif "No hidden payload" in msg:
+                    st.error("No hidden data found in the image.")
+                elif "Failed to decompress" in msg:
+                    st.error("Could not decompress the hidden file. It may be corrupted or use a wrong password.")
+                else:
+                    st.error(msg)
+            except Exception:
+                logger.exception("Unexpected error during decoding")
+                st.error("An unexpected error occurred during decoding.")
 
     st.markdown("---")
     if st.session_state.get("last_output") and HAVE_SHARE:
         if st.button("Share"):
             try:
-                share_id = create_share(st.session_state["last_output"])
+                logger.debug("Creating share for %s", st.session_state["last_output"])
+                with st.spinner("Creating share link..."):
+                    share_id = create_share(st.session_state["last_output"])
                 share_url = f"http://localhost:8000/share/{share_id}"
                 twitter_url = f"https://twitter.com/intent/tweet?url={share_url}"
                 st.success(f"Share link: {share_url}")
                 st.markdown(f"[Tweet this]({twitter_url})")
-            except Exception as e:
-                st.error(str(e))
+            except Exception:
+                logger.exception("Share creation failed")
+                st.error("Failed to create share link.")
     elif st.session_state.get("last_output") and not HAVE_SHARE:
         st.caption("Sharing is disabled (share_utils not available).")
 
