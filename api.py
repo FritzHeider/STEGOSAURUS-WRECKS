@@ -4,20 +4,25 @@ from PIL import Image
 import base64
 import uuid
 import os
+from typing import List
 
-from app import (
+from stego import (
     encode_text_into_plane,
     decode_text_from_plane,
     encode_zlib_into_image,
     decode_zlib_from_image,
 )
-from share_utils import increment_share
+from share_utils import increment_share, create_share
 
 app = FastAPI()
 
 
 @app.post("/encode/text")
-async def encode_text(image: UploadFile = File(...), text: str = Form(...), plane: str = Form("RGB")):
+async def encode_text(
+    image: UploadFile = File(...),
+    text: str = Form(...),
+    plane: str = Form("RGB"),
+):
     data = await image.read()
     temp_in = f"/tmp/{uuid.uuid4()}_{image.filename}"
     with open(temp_in, "wb") as f:
@@ -26,14 +31,19 @@ async def encode_text(image: UploadFile = File(...), text: str = Form(...), plan
     temp_out = f"/tmp/{uuid.uuid4()}.png"
     encode_text_into_plane(img, text, temp_out, plane)
     with open(temp_out, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
+        img_b64 = base64.b64encode(f.read()).decode()
+    share_id = create_share(temp_out)
     os.remove(temp_in)
     os.remove(temp_out)
-    return {"image_base64": b64}
+    base_url = os.getenv("BASE_URL", "").rstrip("/")
+    share_url = f"{base_url}/share/{share_id}" if base_url else f"/share/{share_id}"
+    return {"image_base64": img_b64, "share_url": share_url}
 
 
 @app.post("/decode/text")
-async def decode_text(image: UploadFile = File(...), plane: str = Form("RGB")):
+async def decode_text(
+    image: UploadFile = File(...), plane: str = Form("RGB")
+):
     data = await image.read()
     temp_in = f"/tmp/{uuid.uuid4()}_{image.filename}"
     with open(temp_in, "wb") as f:
@@ -45,7 +55,11 @@ async def decode_text(image: UploadFile = File(...), plane: str = Form("RGB")):
 
 
 @app.post("/encode/zlib")
-async def encode_zlib(image: UploadFile = File(...), file: UploadFile = File(...), plane: str = Form("RGB")):
+async def encode_zlib(
+    image: UploadFile = File(...),
+    file: UploadFile = File(...),
+    plane: str = Form("RGB"),
+):
     image_bytes = await image.read()
     tmp_img = f"/tmp/{uuid.uuid4()}_{image.filename}"
     with open(tmp_img, "wb") as f:
@@ -55,14 +69,19 @@ async def encode_zlib(image: UploadFile = File(...), file: UploadFile = File(...
     tmp_out = f"/tmp/{uuid.uuid4()}.png"
     encode_zlib_into_image(img, file_bytes, tmp_out, plane)
     with open(tmp_out, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
+        img_b64 = base64.b64encode(f.read()).decode()
+    share_id = create_share(tmp_out)
     os.remove(tmp_img)
     os.remove(tmp_out)
-    return {"image_base64": b64}
+    base_url = os.getenv("BASE_URL", "").rstrip("/")
+    share_url = f"{base_url}/share/{share_id}" if base_url else f"/share/{share_id}"
+    return {"image_base64": img_b64, "share_url": share_url}
 
 
 @app.post("/decode/zlib")
-async def decode_zlib(image: UploadFile = File(...), plane: str = Form("RGB")):
+async def decode_zlib(
+    image: UploadFile = File(...), plane: str = Form("RGB")
+):
     data = await image.read()
     tmp_img = f"/tmp/{uuid.uuid4()}_{image.filename}"
     with open(tmp_img, "wb") as f:
